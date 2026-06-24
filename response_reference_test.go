@@ -71,7 +71,50 @@ func TestFindTagEnd(t *testing.T) {
 	}
 }
 
-func TestFindRequestByName(t *testing.T) {
+func TestCollectRequestRefs(t *testing.T) {
+	cols := []collection{
+		{
+			Name: "root",
+			Requests: []request{
+				{Name: "index"},
+			},
+			Collections: []collection{
+				{
+					Name: "op-salary",
+					Requests: []request{
+						{Name: "list"},
+					},
+					Collections: []collection{
+						{
+							Name: "beneficiaries",
+							Requests: []request{
+								{Name: "index"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectRequestRefs(cols, "")
+	if len(refs) != 3 {
+		t.Fatalf("expected 3 refs, got %d", len(refs))
+	}
+
+	expected := []string{
+		"root/index",
+		"root/op-salary/list",
+		"root/op-salary/beneficiaries/index",
+	}
+	for i, want := range expected {
+		if refs[i].path != want {
+			t.Errorf("refs[%d].path = %q, want %q", i, refs[i].path, want)
+		}
+	}
+}
+
+func TestFindRequest(t *testing.T) {
 	cols := []collection{
 		{
 			Name: "Auth",
@@ -96,15 +139,120 @@ func TestFindRequestByName(t *testing.T) {
 		},
 	}
 
-	if r := findRequestByName(cols, "Login"); r == nil {
+	if r, _ := findRequest(cols, "Login"); r == nil {
 		t.Error("expected to find Login")
 	}
-	if r := findRequestByName(cols, "Get Token"); r == nil {
+	if r, _ := findRequest(cols, "Get Token"); r == nil {
 		t.Error("expected to find Get Token in nested collection")
 	}
-	if r := findRequestByName(cols, "Nonexistent"); r != nil {
+	if r, _ := findRequest(cols, "Nonexistent"); r != nil {
 		t.Error("expected nil for nonexistent request")
 	}
+
+	// Full path lookup in nested collection.
+	if r, _ := findRequest(cols, "Auth/OAuth/Get Token"); r == nil {
+		t.Error("expected to find Get Token by full path")
+	}
+}
+
+func TestFindRequest_Ambiguous(t *testing.T) {
+	cols := []collection{
+		{
+			Name: "root",
+			Requests: []request{
+				{Name: "index"},
+			},
+			Collections: []collection{
+				{
+					Name: "op-salary",
+					Collections: []collection{
+						{
+							Name: "beneficiaries",
+							Requests: []request{
+								{Name: "index"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Plain name is ambiguous.
+	r, paths := findRequest(cols, "index")
+	if r != nil {
+		t.Error("expected nil for ambiguous name")
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 ambiguous paths, got %d", len(paths))
+	}
+
+	// Full path resolves the ambiguity.
+	r, paths = findRequest(cols, "root/op-salary/beneficiaries/index")
+	if r == nil {
+		t.Error("expected to find request by full path")
+	}
+	if len(paths) != 0 {
+		t.Error("expected no ambiguity paths when found by full path")
+	}
+}
+
+func TestBuildRequestOptionsFromCollections(t *testing.T) {
+	cols := []collection{
+		{
+			Name: "root",
+			Requests: []request{
+				{Name: "index"},
+				{Name: "health"},
+			},
+			Collections: []collection{
+				{
+					Name: "op-salary",
+					Collections: []collection{
+						{
+							Name: "beneficiaries",
+							Requests: []request{
+								{Name: "index"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	options, labels := buildRequestOptionsFromCollections(cols)
+
+	// Unique name should use plain name.
+	if !containsString(options, "health") {
+		t.Error("expected option 'health'")
+	}
+	if labels["health"] != "root / health" {
+		t.Errorf("label for health = %q, want %q", labels["health"], "root / health")
+	}
+
+	// Duplicate name should use full path as option value.
+	if containsString(options, "index") {
+		t.Error("expected ambiguous 'index' to be replaced by full paths")
+	}
+	if !containsString(options, "root/index") {
+		t.Error("expected option 'root/index'")
+	}
+	if !containsString(options, "root/op-salary/beneficiaries/index") {
+		t.Error("expected option 'root/op-salary/beneficiaries/index'")
+	}
+	if labels["root/op-salary/beneficiaries/index"] != "root / op-salary / beneficiaries / index" {
+		t.Errorf("label for full path = %q, want %q", labels["root/op-salary/beneficiaries/index"], "root / op-salary / beneficiaries / index")
+	}
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUpdateTag(t *testing.T) {

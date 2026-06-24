@@ -42,7 +42,7 @@ func (rr *ResponseReference) Name() string {
 
 // Version returns the plugin version.
 func (rr *ResponseReference) Version() string {
-	return "1.0.0"
+	return "1.1.0"
 }
 
 // Description returns the plugin description.
@@ -138,8 +138,15 @@ func (rr *ResponseReference) resolveTag(tag, workspace string) string {
 		return fmt.Sprintf("[response-reference error: %v]", err)
 	}
 
-	req := findRequestByName(collections, requestName)
+	req, paths := findRequest(collections, requestName)
 	if req == nil {
+		if len(paths) > 1 {
+			return fmt.Sprintf("[response-reference error: request %q is ambiguous, use full path: %s]", requestName, strings.Join(paths, ", "))
+		}
+		if strings.Contains(requestName, "/") {
+			allPaths := collectAllRequestPaths(collections)
+			return fmt.Sprintf("[response-reference error: request %q not found. Available paths: %s]", requestName, strings.Join(allPaths, ", "))
+		}
 		return fmt.Sprintf("[response-reference error: request %q not found]", requestName)
 	}
 
@@ -339,24 +346,75 @@ func loadCollections(workspace string) ([]collection, error) {
 	return cols, nil
 }
 
-// findRequestByName searches all collections recursively for a request by name.
-func findRequestByName(collections []collection, name string) *request {
+// requestRef pairs a request with its full slash-separated collection path.
+type requestRef struct {
+	req  *request
+	path string
+}
+
+// collectRequestRefs walks all collections recursively and returns every
+// request along with its full slash-separated path (e.g.,
+// "root/op-salary/beneficiaries/index").
+func collectRequestRefs(collections []collection, parentPath string) []requestRef {
+	var refs []requestRef
 	for i := range collections {
-		for j := range collections[i].Requests {
-			if collections[i].Requests[j].Name == name {
-				return &collections[i].Requests[j]
-			}
+		path := collections[i].Name
+		if parentPath != "" {
+			path = parentPath + "/" + collections[i].Name
 		}
-		if found := findRequestByName(collections[i].Collections, name); found != nil {
-			return found
+		for j := range collections[i].Requests {
+			reqPath := path + "/" + collections[i].Requests[j].Name
+			refs = append(refs, requestRef{req: &collections[i].Requests[j], path: reqPath})
+		}
+		refs = append(refs, collectRequestRefs(collections[i].Collections, path)...)
+	}
+	return refs
+}
+
+// collectAllRequestPaths returns the full path of every request in the
+// workspace. It is used to build helpful "not found" error messages.
+func collectAllRequestPaths(collections []collection) []string {
+	refs := collectRequestRefs(collections, "")
+	paths := make([]string, 0, len(refs))
+	for _, r := range refs {
+		paths = append(paths, r.path)
+	}
+	return paths
+}
+
+// findRequest resolves a request reference. The ref can be a full
+// slash-separated path (e.g., "root/op-salary/beneficiaries/index") or a plain
+// request name when it is unique across the workspace.
+// When the name is ambiguous, it returns nil and the list of full paths that
+// share the name.
+func findRequest(collections []collection, ref string) (*request, []string) {
+	refs := collectRequestRefs(collections, "")
+
+	// Try full path match first.
+	for _, r := range refs {
+		if r.path == ref {
+			return r.req, nil
 		}
 	}
-	return nil
+
+	// Fall back to unique name match.
+	var paths []string
+	var match *request
+	for _, r := range refs {
+		if r.req.Name == ref {
+			paths = append(paths, r.path)
+			match = r.req
+		}
+	}
+	if len(paths) == 1 {
+		return match, nil
+	}
+	return nil, paths
 }
 
 // buildRequestOptions walks all collections and builds dropdown options.
-// The returned options are request names, and optionLabels map them to
-// a display string like "Collection / Request Name".
+// Unique request names use the plain name as the option value; duplicate names
+// use the full slash-separated path so they can be disambiguated.
 func buildRequestOptions(workspace string) ([]string, map[string]string) {
 	if workspace == "" {
 		return nil, nil
@@ -365,26 +423,32 @@ func buildRequestOptions(workspace string) ([]string, map[string]string) {
 	if err != nil {
 		return nil, nil
 	}
+	return buildRequestOptionsFromCollections(collections)
+}
 
-	options := make([]string, 0)
-	labels := make(map[string]string)
-
-	var walk func(cols []collection, parentPath string)
-	walk = func(cols []collection, parentPath string) {
-		for _, col := range cols {
-			path := col.Name
-			if parentPath != "" {
-				path = parentPath + " / " + col.Name
-			}
-			for _, req := range col.Requests {
-				options = append(options, req.Name)
-				labels[req.Name] = path + " / " + req.Name
-			}
-			walk(col.Collections, path)
-		}
+// buildRequestOptionsFromCollections builds dropdown options from an in-memory
+// collection tree. It is separated from buildRequestOptions to make testing
+// easier.
+func buildRequestOptionsFromCollections(collections []collection) ([]string, map[string]string) {
+	refs := collectRequestRefs(collections, "")
+	nameCounts := make(map[string]int)
+	for _, r := range refs {
+		nameCounts[r.req.Name]++
 	}
 
-	walk(collections, "")
+	options := make([]string, 0, len(refs))
+	labels := make(map[string]string)
+
+	for _, r := range refs {
+		label := strings.ReplaceAll(r.path, "/", " / ")
+		option := r.req.Name
+		if nameCounts[r.req.Name] > 1 {
+			option = r.path
+		}
+		options = append(options, option)
+		labels[option] = label
+	}
+
 	return options, labels
 }
 

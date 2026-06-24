@@ -16,12 +16,12 @@ Before the request is sent, the plugin will look up the most recent response fro
 
 ## Tag Attributes
 
-| Parameter   | Required | Description                                               |
-|-------------|----------|-----------------------------------------------------------|
-| `request`   | Yes      | Name of the source request (dropdown in tag editor)       |
-| `attribute` | Yes      | One of: `body`, `header`, `status`                        |
-| `jsonPath`  | No*      | JSONPath expression when `attribute=body`                 |
-| `headerName`| No*      | Header name when `attribute=header`                       |
+| Parameter   | Required | Description                                                                 |
+|-------------|----------|-----------------------------------------------------------------------------|
+| `request`   | Yes      | Name of the source request, or its full slash-separated collection path     |
+| `attribute` | Yes      | One of: `body`, `header`, `status`                                          |
+| `jsonPath`  | No*      | JSONPath expression when `attribute=body`                                   |
+| `headerName`| No*      | Header name when `attribute=header`                                         |
 
 \* Required when the corresponding `attribute` is selected.
 
@@ -41,6 +41,24 @@ Before the request is sent, the plugin will look up the most recent response fro
 ```
 {{response-reference:ref request="Get Token" attribute="status"}}
 ```
+
+## Referencing requests in nested collections
+
+Collections can be nested. If the source request has a **unique name** across the workspace, you can reference it by name alone:
+
+```
+{{response-reference:ref request="index" attribute="body" jsonPath="object.0.id"}}
+```
+
+If multiple requests share the same name, use the **full slash-separated collection path** to disambiguate. For a request located at `op-salary/beneficiaries/index`:
+
+```json
+{
+  "idBeneficiary": "{{response-reference:ref request="op-salary/beneficiaries/index" attribute="body" jsonPath="object.2.idBeneficiary"}}"
+}
+```
+
+When a name is ambiguous, the tag editor dropdown will automatically use the full path as the value. You can also type the path manually. If you use a path that does not exist, the error message lists all available request paths in the workspace.
 
 ## How it works
 
