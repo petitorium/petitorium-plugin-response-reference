@@ -42,7 +42,7 @@ func (rr *ResponseReference) Name() string {
 
 // Version returns the plugin version.
 func (rr *ResponseReference) Version() string {
-	return "1.0.0"
+	return "1.1.0"
 }
 
 // Description returns the plugin description.
